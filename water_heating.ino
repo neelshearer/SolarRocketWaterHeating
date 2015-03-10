@@ -1,3 +1,5 @@
+#include <Adafruit_MotorShield.h>
+
 /*********************************************************************
 
 This is the code for running a Solar hot water system, with backup Rocket 
@@ -32,6 +34,9 @@ Do your homework, and above all, have fun and good luck!
 #include <Aduino.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Wire.h>
+#include <Adafruit_MotorShield.h>
+#include "utility/Adafruit_PWMServoDriver.h"
  
 // Data wire is plugged into pin 2 on the Arduino
 #define ONE_WIRE_BUS 2
@@ -41,10 +46,20 @@ Do your homework, and above all, have fun and good luck!
 //  is near line 147
 int testRoutine = 0; 
 
+// This section disabled to all use with Motorshield v2.0
 // Declare relay variables
-int relayTank = 4;
-int relaySolar = 5;
-int relayRocket = 6;
+// int relayTank = 4;
+// int relaySolar = 5;
+// int relayRocket = 6;
+
+// Create the motor shield object with the default I2C address
+Adafruit_MotorShield AFMS = Adafruit_MotorShield(); 
+// Or, create it with a different I2C address (say for stacking)
+// Adafruit_MotorShield AFMS = Adafruit_MotorShield(0x61); 
+ 
+Adafruit_DCMotor *motorTank = AFMS.getMotor(1);
+Adafruit_DCMotor *motorSolar = AFMS.getMotor(2);
+Adafruit_DCMotor *motorRocket = AFMS.getMotor(3);
  
 // Setup a oneWire instance to communicate with any OneWire devices 
 // (not just Maxim/Dallas temperature ICs)
