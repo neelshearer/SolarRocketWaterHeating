@@ -1,4 +1,4 @@
-/************************************************************************************
+/*********************************************************************
  * 
  * Water_Heating.ino
  * 
@@ -40,7 +40,7 @@
  * 
  * Above all, have fun and good luck!
  * 
- ***********************************************************************************/
+ *********************************************************************/
 
 #include <Arduino.h>
 #include <OneWire.h>
@@ -180,6 +180,8 @@ boolean tank = false;
 boolean solar = false;
 boolean rocket = false;
 boolean lights = false;
+int loopno = 0;
+int relayGrow = 3;
 
 // End preamble
 
@@ -187,7 +189,7 @@ void setup()
 {
 
   // start serial port
-  //  Serial.begin(9600);
+  // Serial.begin(9600);
   AFMS.begin(20);  // create with the default frequency 1.6KHz
 
   //  Serial.println("Initializing setup loop");
@@ -245,6 +247,10 @@ void setup()
   stairLights->run(RELEASE);  // turn off lights
   //  Serial.println("Pumps test complete");
 
+  // declare the relay pin3 an output
+  pinMode(relayGrow, OUTPUT);
+  digitalWrite(relayGrow,HIGH);
+
 
   // End setup loop
 }
@@ -292,7 +298,7 @@ void loop(void)
     //    if (good) Serial.println(" (good)"); else Serial.println(" (BAD)");
     if (lux < 30) 
     {
-      stairLights->setSpeed((lux*3)+25);
+      stairLights->setSpeed((lux*3)+30);
       stairLights->run(FORWARD);
       lights = true;
     }
@@ -309,6 +315,28 @@ void loop(void)
 
     byte error = light.getError();
     printError(error);
+  }
+
+  // Set up the Grow timing loop - pump should be on for the first 10 cycles in 100. (10% duty cycle)
+
+  // loop counter should be reset after 100 loops.
+
+  if (loopno >= 100) {
+    loopno = 0;
+  }
+
+  // add 1 to the loop counter, and return new value
+
+  ++loopno;
+
+  // now check if we are at the first 10 cycles, if so, turn relay on, otherwise, leave switched off
+
+  if (loopno <= 10) {
+    digitalWrite(relayGrow,LOW);
+  }
+  else
+  {
+    digitalWrite(relayGrow,HIGH);
   }
 
   // call sensors.requestTemperatures() to issue a global temperature
@@ -767,3 +795,10 @@ void printError(byte error)
     ;
   }
 }
+
+
+
+
+
+
+
