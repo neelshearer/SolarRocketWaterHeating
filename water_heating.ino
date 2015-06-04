@@ -6,6 +6,8 @@
  * stove water heating for the greyer days! It also runs a light sensor to turn 
  * on campsite stair lighting when it gets dark. It adjusts the level of light as 
  * it gets darker to avoid dazzling campers and disturbing animal life too much.
+ * Finally, using a loop counter it activates a relay with a 10% duty cycle to 
+ * control a grey water recycling system, and prevent overfilling.
  * 
  * It makes use of several libraries:
  * 
@@ -67,8 +69,6 @@ unsigned int ms;  // Integration ("shutter") time in milliseconds
 
 // Create the motor shield object with the default I2C address
 Adafruit_MotorShield AFMS = Adafruit_MotorShield(); 
-// Or, create it with a different I2C address (say for stacking)
-// Adafruit_MotorShield AFMS = Adafruit_MotorShield(0x61); 
 
 Adafruit_DCMotor *motorTank = AFMS.getMotor(1);
 Adafruit_DCMotor *motorSolar = AFMS.getMotor(2);
@@ -89,18 +89,6 @@ DallasTemperature sensors(&oneWire);
 #define OLED_CS    12
 #define OLED_RESET 13
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
-
-/* Uncomment this block to use hardware SPI
- #define OLED_DC     6
- #define OLED_CS     7
- #define OLED_RESET  8
- Adafruit_SSD1306 display(OLED_DC, OLED_RESET, OLED_CS);
- */
-
-//#define NUMFLAKES 10
-//#define XPOS 0
-//#define YPOS 1
-//#define DELTAY 2
 
 // Declare the glyph for the Tank loop 
 
@@ -148,7 +136,6 @@ static const unsigned char PROGMEM logo16_sol_bmp[] =
   B01111111, B11111111,
   B00000000, B00000000 };
 
-
 // Declare the glyph for the Rocket loop
 
 #define LOGO16_ROCK_HEIGHT 16 
@@ -188,29 +175,16 @@ int relayGrow = 3;
 void setup()
 {
 
-  // start serial port
-  // Serial.begin(9600);
-  AFMS.begin(20);  // create with the default frequency 1.6KHz
+  // intialize the motorshield with a pwm frequency of 20
+  AFMS.begin(20);
 
-  //  Serial.println("Initializing setup loop");
+  // initialize the light sensor
   light.begin();
 
-  // The light sensor has a default integration time of 402ms,
-  // and a default gain of low (1X).
-
-  // If you would like to change either of these, you can
-  // do so using the setTiming() command.
-
-  // If gain = false (0), device is set to low gain (1X)
-  // If gain = high (1), device is set to high gain (16X)
-
+  // set gain to low
   gain = 0;
 
-  // If time = 0, integration will be 13.7ms
-  // If time = 1, integration will be 101ms
-  // If time = 2, integration will be 402ms
-  // If time = 3, use manual start / stop to perform your own integration
-
+  // integration time of light sensor set to 402ms
   unsigned char time = 2;
 
   // setTiming() will set the third parameter (ms) to the
@@ -231,11 +205,11 @@ void setup()
   // init done
   display.clearDisplay();
 
-  // Test all pumps at maximum for 2s
+  // Test all pumps at maximum, and the lights (at 50%) for 2s
   motorTank->setSpeed(255);
   motorSolar->setSpeed(255);
   motorRocket->setSpeed(255);
-  stairLights->setSpeed(60);
+  stairLights->setSpeed(128);
   motorTank->run(FORWARD);  // turn on motor
   motorSolar->run(FORWARD);  // turn on motor
   motorRocket->run(FORWARD);  // turn on motor
@@ -245,12 +219,12 @@ void setup()
   motorSolar->run(RELEASE);  // turn off motor
   motorRocket->run(RELEASE);  // turn off motor
   stairLights->run(RELEASE);  // turn off lights
-  //  Serial.println("Pumps test complete");
 
-  // declare the relay pin3 an output
+  // declare the relay pin3 an output for the grey water pump
   pinMode(relayGrow, OUTPUT);
-  digitalWrite(relayGrow,HIGH);
 
+  // set relay to off initially
+  digitalWrite(relayGrow,HIGH);
 
   // End setup loop
 }
@@ -268,7 +242,6 @@ void loop(void)
   // and one for infrared. Both sensors are needed for lux calculations.
 
   // Retrieve the data from the device:
-  //  Serial.println("Begin main loop");
 
   unsigned int data0, data1;
   double lux;    // Resulting lux value
@@ -292,10 +265,6 @@ void loop(void)
 
     good = light.getLux(gain,ms,data0,data1,lux);
 
-    // Print out the results:
-    //    Serial.print("lux: ");
-    //    Serial.println(lux);
-    //    if (good) Serial.println(" (good)"); else Serial.println(" (BAD)");
     if (lux < 30) 
     {
       stairLights->setSpeed((lux*3)+30);
@@ -464,10 +433,10 @@ void loop(void)
   // Error state of the onewire temp sensor is 85 degrees, however, I have also 
   //  seen temps of -127 reported: check for both and declare an error state
   // Error state declared when the rocket stove is reporting a temperature above 
-  //  90degrees
+  //  95degrees
   // Error state is the activation of all pumps at high speed for safety reasons.
-  // TODO: Even in an error state, allow pumps to rest for 30 seconds in every 5
-  //  minutes
+  // Even in an error state, pumps are allowed to rest for roughly 30 seconds in
+  //  every 5 minutes (95% duty cycle) using the loop counter.
   //
 
   if (tempTank==-127.00 || 
@@ -486,17 +455,34 @@ void loop(void)
     tempSolar==tempRocket ||
     tempRocket>=95.00)
   {
-    motorTank->setSpeed(255);
-    motorSolar->setSpeed(255);
-    motorRocket->setSpeed(255);
-    motorTank->run(FORWARD);  // turn on motor
-    motorSolar->run(FORWARD);  // turn on motor
-    motorRocket->run(FORWARD);  // turn on motor
+    if (loopno <= 5) {
 
-    tank = true;
-    solar = true;
-    rocket = true;
+      motorTank->setSpeed(0);
+      motorSolar->setSpeed(0);
+      motorRocket->setSpeed(0);
+      motorTank->run(RELEASE);  // turn off motor
+      motorSolar->run(RELEASE);  // turn off motor
+      motorRocket->run(RELEASE);  // turn off motor
 
+      tank = false;
+      solar = false;
+      rocket = false;
+
+    }
+    else
+    {
+
+      motorTank->setSpeed(255);
+      motorSolar->setSpeed(255);
+      motorRocket->setSpeed(255);
+      motorTank->run(FORWARD);  // turn on motor
+      motorSolar->run(FORWARD);  // turn on motor
+      motorRocket->run(FORWARD);  // turn on motor
+
+      tank = true;
+      solar = true;
+      rocket = true;
+    }
     // Briefly display current error state
 
       display.setTextWrap(false);
@@ -744,8 +730,9 @@ void loop(void)
 
   //
   // Hack to ensure smooth looping of the animation and no fixed frame while 
-  //   restarting arduino main loop - set display to show main tank temperature
+  //  restarting arduino main loop - set display to show main tank temperature
   //
+
   display.setTextWrap(false);
   display.setTextSize(5);
   display.setTextColor(WHITE);
@@ -795,10 +782,3 @@ void printError(byte error)
     ;
   }
 }
-
-
-
-
-
-
-
