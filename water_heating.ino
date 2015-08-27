@@ -1,3 +1,4 @@
+
 /*********************************************************************
  * 
  * Water_Heating.ino
@@ -6,8 +7,11 @@
  * stove water heating for the greyer days! It also runs a light sensor to turn 
  * on campsite stair lighting when it gets dark. It adjusts the level of light as 
  * it gets darker to avoid dazzling campers and disturbing animal life too much.
- * Finally, using a loop counter it activates a relay with a 10% duty cycle to 
- * control a grey water recycling system, and prevent overfilling.
+ * Using a loop counter it activates a relay with a 4% duty cycle to control a
+ * grey water recycling system, and prevent overfilling. It also uses this 
+ * counter and the light sensor to determine when to turn off the freezer 
+ * overnight to help save battery power. The freezer automatically turns on again
+ * at dawn.
  * 
  * It makes use of several libraries:
  * 
@@ -22,7 +26,7 @@
  * 
  * The system uses 4 onewire temperature sensors, all 4 PWM outputs of an Adafruit 
  * Motorshield (v2.3), a TSL2561 Light sensor from Sparkfun and an Adafruit 1306 
- * Monochrome OLED display.
+ * Monochrome OLED display, as well as two relay shields.
  * 
  * It should be fairly easy to tweak this to your needs - code is commented, and 
  * makes use of only trivial constructs (if, for, do etc) and basic glyph building 
@@ -167,8 +171,10 @@ boolean tank = false;
 boolean solar = false;
 boolean rocket = false;
 boolean lights = false;
-int loopno = 0;
+int loopno = 3;
+int loopFreezer = 7;
 int relayGrow = 3;
+int relayFreezer = 4;
 
 // End preamble
 
@@ -205,6 +211,16 @@ void setup()
   // init done
   display.clearDisplay();
 
+  // declare the relay pin3 an output for the grey water pump
+  pinMode(relayGrow, OUTPUT);
+
+  // declare the relay pin4 an output for the freezer power
+  pinMode(relayFreezer, OUTPUT);
+
+  // set relays to off initially
+  digitalWrite(relayGrow,HIGH);
+  digitalWrite(relayFreezer,HIGH);
+
   // Test all pumps at maximum, and the lights (at 50%) for 2s
   motorTank->setSpeed(255);
   motorSolar->setSpeed(255);
@@ -214,17 +230,14 @@ void setup()
   motorSolar->run(FORWARD);  // turn on motor
   motorRocket->run(FORWARD);  // turn on motor
   stairLights->run(FORWARD);  // turn on lights
+  digitalWrite(relayGrow,LOW);
   delay(2000);
   motorTank->run(RELEASE);  // turn off motor
   motorSolar->run(RELEASE);  // turn off motor
   motorRocket->run(RELEASE);  // turn off motor
   stairLights->run(RELEASE);  // turn off lights
-
-  // declare the relay pin3 an output for the grey water pump
-  pinMode(relayGrow, OUTPUT);
-
-  // set relay to off initially
   digitalWrite(relayGrow,HIGH);
+
 
   // End setup loop
 }
@@ -265,7 +278,7 @@ void loop(void)
 
     good = light.getLux(gain,ms,data0,data1,lux);
 
-    if (lux < 30) 
+    if (good == true && lux < 30) 
     {
       stairLights->setSpeed((lux*3)+30);
       stairLights->run(FORWARD);
@@ -284,13 +297,16 @@ void loop(void)
 
     byte error = light.getError();
     printError(error);
+    stairLights->setSpeed(0);
+    stairLights->run(RELEASE);
+    lights = false;
   }
 
-  // Set up the Grow timing loop - pump should be on for the first 10 cycles in 100. (10% duty cycle)
+  // Set up the Grow timing loop - pump should be on for the first 3 and middle 3 cycles in 75.
 
-  // loop counter should be reset after 100 loops.
+  // loop counter should be reset after 75 loops.
 
-  if (loopno >= 100) {
+  if (loopno >= 75) {
     loopno = 0;
   }
 
@@ -298,14 +314,45 @@ void loop(void)
 
   ++loopno;
 
-  // now check if we are at the first 10 cycles, if so, turn relay on, otherwise, leave switched off
+  // now check if we are at the first 4 cycles, if so, turn relay on, otherwise, leave switched off
 
-  if (loopno <= 10) {
-    digitalWrite(relayGrow,LOW);
+  if ((loopno <= 3 || (loopno > 37 && loopno <= 40)) && lights == false) {
+    digitalWrite(relayGrow,LOW); // switch the relay and run the pump
   }
   else
   {
-    digitalWrite(relayGrow,HIGH);
+    digitalWrite(relayGrow,HIGH); // don't switch the relay (no pump)
+  }
+
+  // Freezer will be turned off and on with a cycle of 6 complete loopno cycles (about 1 hour). 
+  // Once stair lights are lit, freezer will run on a new cycle...
+
+  // reset the counter the moment the stair lights are off and after the counter has 
+  // completed a complete cycle (12 count)
+  if (lights == false && loopFreezer >= 12) {
+    loopFreezer = 0;
+  }
+
+  // now set our freezer loop counter using loopno as a base
+  if (loopno == 1) {
+    ++loopFreezer;
+  }
+
+  // if the freezer loop count is less than or equal to 8 then turn the freezer on
+  // else turn the freezer off. This is roughly equal to 60 minutes in every 2 hours.
+  // As freezer loop is only ever reset during the day, this means freezer will not 
+  // turn on overnight apart for quick boosts - roughly 30 minutes in every 2 hours)
+  if (loopFreezer <= 6 || 
+       (loopFreezer > 18 && loopFreezer <=21) || 
+       (loopFreezer > 30 && loopFreezer <=33) || 
+       (loopFreezer > 42 && loopFreezer <=45) ||  
+       (loopFreezer > 54 && loopFreezer <=57) ||  
+       (loopFreezer > 66 && loopFreezer <=69)) {
+    digitalWrite(relayFreezer,LOW); // switch the relay and turn on freezer   
+  }
+  else 
+  {
+    digitalWrite(relayFreezer,HIGH); // switch the relay and turn off freezer
   }
 
   // call sensors.requestTemperatures() to issue a global temperature
@@ -384,21 +431,21 @@ void loop(void)
   // If Rocket is warmer than LLH+5 degrees, then start the Rocket pump
   //
 
-  if (tempRocket>(tempLLH+5) && tempRocket>(tempTank+5))
+  if (tempRocket>(tempLLH+10) && tempRocket>(tempTank+10))
   {
     motorRocket->run(FORWARD);
     for (i=255; i>50; i=i-25) {
       motorRocket->setSpeed(i);  
       delay(20);
     }
-    if (tempRocket<40)
+    if (tempRocket<55)
     {
-      motorRocket->setSpeed(25);
+      motorRocket->setSpeed(30);
       rocket = true;
     }
-    else if (tempRocket>=40 && tempRocket<70)
+    else if (tempRocket>=55 && tempRocket<80)
     {
-      motorRocket->setSpeed(round(tempRocket-15));
+      motorRocket->setSpeed(round(tempRocket-25));
       rocket = true;
     }
     else if (tempRocket>=90)
@@ -410,8 +457,8 @@ void loop(void)
     {
       // Calculation of of how speed adjusts with temperature is as follows:
       // ((Detected temp - ramping start temp)*Ramp factor)+ramping start speed)
-      // Where Ramp factor = Maximum possible speed (255) - start speed (e.g.60) all divided by maximum temp (e.g.95) - ramping start temp (e.g.80) i.e. 195/15
-      motorRocket->setSpeed(round(((tempRocket-70)*10)+55));
+      // Where Ramp factor = Maximum possible speed (255) - start speed (e.g.45) all divided by maximum temp (e.g.90) - ramping start temp (e.g.70) i.e. 210/20
+      motorRocket->setSpeed(round(((tempRocket-80)*20)+55));
       rocket = true;
     }
 
@@ -455,7 +502,7 @@ void loop(void)
     tempSolar==tempRocket ||
     tempRocket>=95.00)
   {
-    if (loopno <= 5) {
+    if (loopno < 5) {
 
       motorTank->setSpeed(0);
       motorSolar->setSpeed(0);
@@ -604,128 +651,171 @@ void loop(void)
   // Detect if any pumps are currently running
   //
 
-  if (tank == true || 
-    solar == true || 
-    rocket == true)
-  {
 
-    // Animated display routine
-    // Display the pump running animation for the relevant pump(s) and pump
-    //   glyphs for 10 cycles
+  // Animated display routine
+  // Display the pump running animation for the relevant pump(s) and pump
+  //   glyphs for 10 cycles
 
 
-    for (int i=0; i <= 10; i++){
-      display.setTextWrap(false);
-      display.setTextSize(5);
-      display.setTextColor(WHITE);
-      display.setCursor(0,0);
-      display.clearDisplay();
-      display.print(tempTank,0);
-      display.write(9);
-      display.println("C");
-      display.setTextSize(2);
-      if (tank == true){
-        display.setCursor(20,48);
-        display.print("/");
-      };
-      if (solar == true){
-        display.setCursor(64,48);
-        display.print("-");
-      };
-      if (rocket == true){
-        display.setCursor(112,48);
-        display.print("\\");
-      };
-      display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
-      display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
-      display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
-      display.display();
-
-      delay(50);
-
-      display.setTextWrap(false);
-      display.setTextSize(5);
-      display.setTextColor(WHITE);
-      display.setCursor(0,0);
-      display.clearDisplay();
-      display.print(tempTank,0);
-      display.write(9);
-      display.println("C");
-      display.setTextSize(2);
-      if (tank == true){
-        display.setCursor(20,48);
-        display.print("-");
-      };
-      if (solar == true){
-        display.setCursor(64,48);
-        display.print("\\");
-      };
-      if (rocket == true){
-        display.setCursor(112,48);
-        display.print("|");
-      };
-      display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
-      display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
-      display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
-      display.display();
-
-      delay(50);
-
-      display.setTextWrap(false);
-      display.setTextSize(5);
-      display.setTextColor(WHITE);
-      display.setCursor(0,0);
-      display.clearDisplay();
-      display.print(tempTank,0);
-      display.write(9);
-      display.println("C");
-      display.setTextSize(2);
-      if (tank == true){
-        display.setCursor(20,48);
-        display.print("\\");
-      };
-      if (solar == true){
-        display.setCursor(64,48);
-        display.print("|");
-      };
-      if (rocket == true){
-        display.setCursor(112,48);
-        display.print("/");
-      };
-      display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
-      display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
-      display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
-      display.display();
-
-      delay(50);
-
-      display.setTextWrap(false);
-      display.setTextSize(5);
-      display.setTextColor(WHITE);
-      display.setCursor(0,0);
-      display.clearDisplay();
-      display.print(tempTank,0);
-      display.write(9);
-      display.println("C");
-      display.setTextSize(2);
-      if (tank == true){
-        display.setCursor(20,48);
-        display.print("|");
-      };
-      if (solar == true){
-        display.setCursor(64,48);
-        display.print("/");
-      };
-      if (rocket == true){
-        display.setCursor(112,48);
-        display.print("-");
-      };
-      display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
-      display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
-      display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
-      display.display();
-
+  for (int i=0; i <= 10; i++){
+    display.setTextWrap(false);
+    display.setTextSize(5);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    display.clearDisplay();
+    display.print(tempTank,0);
+    display.write(9);
+    display.println("C");
+    display.setTextSize(2);
+    if (tank == true){
+      display.setCursor(20,48);
+      display.print("/");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
     };
+    if (solar == true){
+      display.setCursor(64,48);
+      display.print("-");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (rocket == true){
+      display.setCursor(112,48);
+      display.print("\\");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
+    display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
+    display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
+    display.display();
+
+    delay(50);
+
+    display.setTextWrap(false);
+    display.setTextSize(5);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    display.clearDisplay();
+    display.print(tempTank,0);
+    display.write(9);
+    display.println("C");
+    display.setTextSize(2);
+    if (tank == true){
+      display.setCursor(20,48);
+      display.print("-");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (solar == true){
+      display.setCursor(64,48);
+      display.print("\\");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (rocket == true){
+      display.setCursor(112,48);
+      display.print("|");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
+    display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
+    display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
+    display.display();
+
+    delay(50);
+
+    display.setTextWrap(false);
+    display.setTextSize(5);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    display.clearDisplay();
+    display.print(tempTank,0);
+    display.write(9);
+    display.println("C");
+    display.setTextSize(2);
+    if (tank == true){
+      display.setCursor(20,48);
+      display.print("\\");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (solar == true){
+      display.setCursor(64,48);
+      display.print("|");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (rocket == true){
+      display.setCursor(112,48);
+      display.print("/");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
+    display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
+    display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
+    display.display();
+
+    delay(50);
+
+    display.setTextWrap(false);
+    display.setTextSize(5);
+    display.setTextColor(WHITE);
+    display.setCursor(0,0);
+    display.clearDisplay();
+    display.print(tempTank,0);
+    display.write(9);
+    display.println("C");
+    display.setTextSize(2);
+    if (tank == true){
+      display.setCursor(20,48);
+      display.print("|");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (solar == true){
+      display.setCursor(64,48);
+      display.print("/");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    if (rocket == true){
+      display.setCursor(112,48);
+      display.print("-");
+    }
+    else{
+      display.setCursor(20,48);
+      display.print(" "); 
+    };
+    display.drawBitmap(0, 46,  logo16_glcd_bmp, 16, 16, 1);
+    display.drawBitmap(44, 46,  logo16_sol_bmp, 16, 16, 1);
+    display.drawBitmap(92, 46,  logo16_rock_bmp, 16, 16, 1);
+    display.display();
+
   };
 
   //
